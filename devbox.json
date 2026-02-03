@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "packages": ["go@1.25", "prettier@latest"],
+  "shell": {
+    "scripts": {
+      "start": ["go run ./cmd/streamer/"],
+      "lint-markdown": ["prettier --write ."]
+    }
+  }
+}

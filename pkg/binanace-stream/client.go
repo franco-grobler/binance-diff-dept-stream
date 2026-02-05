@@ -11,6 +11,10 @@ type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
+type WSClient interface {
+	Stream(req *http.Request) error
+}
+
 type Client struct {
 	HTTPClient HTTPClient
 }

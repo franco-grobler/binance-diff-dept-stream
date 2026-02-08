@@ -1,12 +1,5 @@
 package binanacestream
 
-import (
-	"context"
-	"net/http"
-
-	"github.com/coder/websocket"
-)
-
 // UpdateSpeed allowed values for depth when streaming from websocket.
 type UpdateSpeed int
 
@@ -43,7 +36,7 @@ type Parser func(data []byte, v any) error
 //	}
 type DiffStream struct {
 	EventType     string      `json:"e"`
-	EventTime     string      `json:"E"`
+	EventTime     uint64      `json:"E"`
 	Symbol        string      `json:"s"`
 	FirstUpdateID uint        `json:"U"`
 	FinalUpdateID uint        `json:"u"`
@@ -60,24 +53,9 @@ type DiffSnapshot struct {
 // StreamClient defines required methods for a client to manage a local order book.
 type StreamClient interface {
 	DepthStream(
-		ctx context.Context,
 		symbols []string,
 		updateSpeed UpdateSpeed,
 		outCh chan<- []byte,
 	) error
 	DepthSnapshot(symbol string, limit int16) (*DiffSnapshot, error)
-}
-
-// HTTPClient Define the interface for the HTTP client's behaviour
-type HTTPClient interface {
-	Do(req *http.Request) (*http.Response, error)
-}
-
-// WSClient piggybacks on coder/websocket. Golang has no standard websocket implementation.
-type WSClient interface {
-	Dial(
-		ctx context.Context,
-		url string,
-		opts *websocket.DialOptions,
-	) (*websocket.Conn, *http.Response, error)
 }

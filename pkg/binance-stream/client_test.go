@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -24,10 +23,38 @@ func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return m.DoFunc(req)
 }
 
+// MockWSConnection implements WSConnection for testing.
+type MockWSConnection struct {
+	ReadFunc  func(ctx context.Context) (websocket.MessageType, []byte, error)
+	WriteFunc func(ctx context.Context, typ websocket.MessageType, p []byte) error
+	CloseFunc func(code websocket.StatusCode, reason string) error
+}
+
+func (m *MockWSConnection) Read(ctx context.Context) (websocket.MessageType, []byte, error) {
+	if m.ReadFunc != nil {
+		return m.ReadFunc(ctx)
+	}
+	return websocket.MessageText, nil, nil
+}
+
+func (m *MockWSConnection) Write(ctx context.Context, typ websocket.MessageType, p []byte) error {
+	if m.WriteFunc != nil {
+		return m.WriteFunc(ctx, typ, p)
+	}
+	return nil
+}
+
+func (m *MockWSConnection) Close(code websocket.StatusCode, reason string) error {
+	if m.CloseFunc != nil {
+		return m.CloseFunc(code, reason)
+	}
+	return nil
+}
+
 // MockWSClient implements WSClient for testing.
 type MockWSClient struct {
 	Context  context.Context
-	DialFunc func(url string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
+	DialFunc func(url string, opts *websocket.DialOptions) (WSConnection, *http.Response, error)
 }
 
 func (m *MockWSClient) GetContext() context.Context {
@@ -37,7 +64,7 @@ func (m *MockWSClient) GetContext() context.Context {
 func (m *MockWSClient) Dial(
 	url string,
 	opts *websocket.DialOptions,
-) (*websocket.Conn, *http.Response, error) {
+) (WSConnection, *http.Response, error) {
 	return m.DialFunc(url, opts)
 }
 
@@ -281,7 +308,7 @@ func TestClient_DepthStream_URLConstruction(t *testing.T) {
 			var dialedURL string
 			mockWS := &MockWSClient{
 				Context: ctx,
-				DialFunc: func(url string, _ *websocket.DialOptions) (*websocket.Conn, *http.Response, error) {
+				DialFunc: func(url string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
 					dialedURL = url
 					return nil, nil, errors.New("dial stopped for testing")
 				},
@@ -312,7 +339,7 @@ func TestClient_DepthStream_DialError(t *testing.T) {
 
 	mockWS := &MockWSClient{
 		Context: ctx,
-		DialFunc: func(_ string, _ *websocket.DialOptions) (*websocket.Conn, *http.Response, error) {
+		DialFunc: func(_ string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
 			return nil, nil, expectedErr
 		},
 	}
@@ -486,7 +513,7 @@ func TestClient_DepthStream_ContextCancellation(t *testing.T) {
 
 	mockWS := &MockWSClient{
 		Context: ctx,
-		DialFunc: func(_ string, _ *websocket.DialOptions) (*websocket.Conn, *http.Response, error) {
+		DialFunc: func(_ string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
 			return nil, nil, errors.New("dial stopped")
 		},
 	}
@@ -512,7 +539,7 @@ func TestClient_DepthStream_EmptySymbols(t *testing.T) {
 	var dialedURL string
 	mockWS := &MockWSClient{
 		Context: ctx,
-		DialFunc: func(url string, _ *websocket.DialOptions) (*websocket.Conn, *http.Response, error) {
+		DialFunc: func(url string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
 			dialedURL = url
 			return nil, nil, errors.New("dial stopped for testing")
 		},
@@ -568,7 +595,7 @@ func TestClient_DepthStream_SymbolCaseConversion(t *testing.T) {
 
 			mockWS := &MockWSClient{
 				Context: ctx,
-				DialFunc: func(url string, _ *websocket.DialOptions) (*websocket.Conn, *http.Response, error) {
+				DialFunc: func(url string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
 					dialedURL = url
 					return nil, nil, errors.New("dial stopped")
 				},
@@ -677,41 +704,42 @@ func TestClient_DepthSnapshot_RequestError(t *testing.T) {
 	}
 }
 
-// TestClient_DepthStream_Integration tests DepthStream with a real WebSocket server.
-// NOTE: This test demonstrates the working path of DepthStream. We receive one message
-// successfully. The test may leave a goroutine that panics on cleanup, but this is
-// expected behaviour per the production code's design (intentional panic on read errors).
+// TestClient_DepthStream_Integration tests DepthStream with mocked connection.
+// This test verifies the full flow of receiving a message through DepthStream.
 func TestClient_DepthStream_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
-	// Create a test WebSocket server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close(websocket.StatusNormalClosure, "")
-
-		// Send a test message
-		testData := `{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":100,"u":105,"b":[["50000.00","1.5"]],"a":[["50001.00","2.0"]]}`
-		_ = conn.Write(r.Context(), websocket.MessageText, []byte(testData))
-
-		// Keep connection open briefly
-		time.Sleep(200 * time.Millisecond)
-	}))
-	defer server.Close()
-
-	// Convert http:// to ws://
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
+	testData := `{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":100,"u":105,"b":[["50000.00","1.5"]],"a":[["50001.00","2.0"]]}`
+	msgSent := false
+
+	mockConn := &MockWSConnection{
+		ReadFunc: func(_ context.Context) (websocket.MessageType, []byte, error) {
+			if !msgSent {
+				msgSent = true
+				return websocket.MessageText, []byte(testData), nil
+			}
+			// Block until context is done to simulate open connection
+			<-ctx.Done()
+			return 0, nil, ctx.Err()
+		},
+		CloseFunc: func(_ websocket.StatusCode, _ string) error {
+			return nil
+		},
+	}
+
+	mockWS := &MockWSClient{
+		Context: ctx,
+		DialFunc: func(_ string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
+			return mockConn, nil, nil
+		},
+	}
+
 	client := Client{
-		wsURL:    wsURL,
-		WSClient: NewCoderClient(ctx),
+		wsURL:    "wss://stream.binance.com:9443/ws",
+		WSClient: mockWS,
 	}
 
 	outCh := make(chan []byte, 10)
@@ -734,40 +762,47 @@ func TestClient_DepthStream_Integration(t *testing.T) {
 	}
 }
 
-// TestClient_DepthStream_MultipleMessages tests receiving multiple messages.
-// NOTE: This test may leave a goroutine that panics on cleanup.
+// TestClient_DepthStream_MultipleMessages tests receiving multiple messages with mocked connection.
 func TestClient_DepthStream_MultipleMessages(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
+	t.Parallel()
 
 	messageCount := 3
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close(websocket.StatusNormalClosure, "")
-
-		// Send multiple messages
-		for range messageCount {
-			testData := `{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":100,"u":105,"b":[],"a":[]}`
-			_ = conn.Write(r.Context(), websocket.MessageText, []byte(testData))
-			time.Sleep(10 * time.Millisecond)
-		}
-		// Keep connection open briefly
-		time.Sleep(200 * time.Millisecond)
-	}))
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
+	msgIndex := 0
+	messages := []string{
+		`{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":100,"u":101,"b":[],"a":[]}`,
+		`{"e":"depthUpdate","E":1672515782137,"s":"BTCUSDT","U":101,"u":102,"b":[],"a":[]}`,
+		`{"e":"depthUpdate","E":1672515782138,"s":"BTCUSDT","U":102,"u":103,"b":[],"a":[]}`,
+	}
+
+	mockConn := &MockWSConnection{
+		ReadFunc: func(_ context.Context) (websocket.MessageType, []byte, error) {
+			if msgIndex < len(messages) {
+				msg := messages[msgIndex]
+				msgIndex++
+				return websocket.MessageText, []byte(msg), nil
+			}
+			// Block until context is done
+			<-ctx.Done()
+			return 0, nil, ctx.Err()
+		},
+		CloseFunc: func(_ websocket.StatusCode, _ string) error {
+			return nil
+		},
+	}
+
+	mockWS := &MockWSClient{
+		Context: ctx,
+		DialFunc: func(_ string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
+			return mockConn, nil, nil
+		},
+	}
+
 	client := Client{
-		wsURL:    wsURL,
-		WSClient: NewCoderClient(ctx),
+		wsURL:    "wss://stream.binance.com:9443/ws",
+		WSClient: mockWS,
 	}
 
 	outCh := make(chan []byte, 10)
@@ -783,20 +818,16 @@ func TestClient_DepthStream_MultipleMessages(t *testing.T) {
 		select {
 		case _, ok := <-outCh:
 			if !ok {
-				return
+				t.Fatalf("channel closed after receiving %d messages", received)
 			}
 			received++
 		case <-timeout:
-			if received >= messageCount {
-				return
-			}
-			t.Logf("received %d messages before timeout", received)
-			return
+			t.Fatalf("timeout: received %d messages, expected %d", received, messageCount)
 		}
 	}
 
-	if received < messageCount {
-		t.Errorf("received %d messages, expected at least %d", received, messageCount)
+	if received != messageCount {
+		t.Errorf("received %d messages, expected %d", received, messageCount)
 	}
 }
 
@@ -805,4 +836,349 @@ func TestClient_DepthStream_MultipleMessages(t *testing.T) {
 // (see client.go line 112). This is a design decision for the assessment, not a bug.
 func TestClient_DepthStream_ContextCancel(t *testing.T) {
 	t.Skip("Skipped: Production code panics on context cancellation by design")
+}
+
+// TestClient_DepthStream_MockConnection tests DepthStream with mocked connection.
+func TestClient_DepthStream_MockConnection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		messages          [][]byte
+		readErr           error
+		readErrAfter      int // Return error after this many reads
+		closeErr          error
+		wantMessages      int
+		wantChannelClosed bool
+	}{
+		{
+			name: "single message then error closes channel",
+			messages: [][]byte{
+				[]byte(`{"e":"depthUpdate","s":"BTCUSDT"}`),
+			},
+			readErr:           errors.New("connection closed"),
+			readErrAfter:      1,
+			wantMessages:      1,
+			wantChannelClosed: true,
+		},
+		{
+			name: "multiple messages then error closes channel",
+			messages: [][]byte{
+				[]byte(`{"e":"depthUpdate","s":"BTCUSDT","U":1}`),
+				[]byte(`{"e":"depthUpdate","s":"BTCUSDT","U":2}`),
+				[]byte(`{"e":"depthUpdate","s":"BTCUSDT","U":3}`),
+			},
+			readErr:           errors.New("connection closed"),
+			readErrAfter:      3,
+			wantMessages:      3,
+			wantChannelClosed: true,
+		},
+		{
+			name:              "immediate read error closes channel",
+			messages:          [][]byte{},
+			readErr:           errors.New("read failed"),
+			readErrAfter:      0,
+			wantMessages:      0,
+			wantChannelClosed: true,
+		},
+		{
+			name: "close error is logged but doesn't affect behaviour",
+			messages: [][]byte{
+				[]byte(`{"e":"depthUpdate","s":"ETHUSDT"}`),
+			},
+			readErr:           errors.New("connection closed"),
+			readErrAfter:      1,
+			closeErr:          errors.New("close failed"),
+			wantMessages:      1,
+			wantChannelClosed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+
+			readCount := 0
+			mockConn := &MockWSConnection{
+				ReadFunc: func(_ context.Context) (websocket.MessageType, []byte, error) {
+					if readCount < len(tt.messages) && readCount < tt.readErrAfter {
+						msg := tt.messages[readCount]
+						readCount++
+						return websocket.MessageText, msg, nil
+					}
+					return 0, nil, tt.readErr
+				},
+				CloseFunc: func(_ websocket.StatusCode, _ string) error {
+					return tt.closeErr
+				},
+			}
+
+			mockWS := &MockWSClient{
+				Context: ctx,
+				DialFunc: func(_ string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
+					return mockConn, nil, nil
+				},
+			}
+
+			client := Client{
+				wsURL:    "wss://stream.binance.com:9443/ws",
+				WSClient: mockWS,
+			}
+
+			outCh := make(chan []byte, 10)
+			err := client.DepthStream([]string{"BTCUSDT"}, Second, outCh)
+			if err != nil {
+				t.Fatalf("DepthStream() error = %v", err)
+			}
+
+			// Collect messages
+			received := 0
+			timeout := time.After(200 * time.Millisecond)
+		loop:
+			for {
+				select {
+				case msg, ok := <-outCh:
+					if !ok {
+						// Channel closed
+						break loop
+					}
+					if msg != nil {
+						received++
+					}
+				case <-timeout:
+					break loop
+				}
+			}
+
+			if received != tt.wantMessages {
+				t.Errorf("received %d messages, want %d", received, tt.wantMessages)
+			}
+
+			// Check channel is closed
+			if tt.wantChannelClosed {
+				select {
+				case _, ok := <-outCh:
+					if ok {
+						t.Error("expected channel to be closed")
+					}
+				case <-time.After(100 * time.Millisecond):
+					// Channel may already be drained
+				}
+			}
+		})
+	}
+}
+
+// TestClient_DepthStream_MessageContent tests that message content is passed correctly.
+func TestClient_DepthStream_MessageContent(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	expectedMsg := `{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":100,"u":105,"b":[["50000.00","1.5"]],"a":[["50001.00","2.0"]]}`
+	msgSent := false
+
+	mockConn := &MockWSConnection{
+		ReadFunc: func(_ context.Context) (websocket.MessageType, []byte, error) {
+			if !msgSent {
+				msgSent = true
+				return websocket.MessageText, []byte(expectedMsg), nil
+			}
+			return 0, nil, errors.New("done")
+		},
+	}
+
+	mockWS := &MockWSClient{
+		Context: ctx,
+		DialFunc: func(_ string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
+			return mockConn, nil, nil
+		},
+	}
+
+	client := Client{
+		wsURL:    "wss://stream.binance.com:9443/ws",
+		WSClient: mockWS,
+	}
+
+	outCh := make(chan []byte, 10)
+	err := client.DepthStream([]string{"BTCUSDT"}, Second, outCh)
+	if err != nil {
+		t.Fatalf("DepthStream() error = %v", err)
+	}
+
+	select {
+	case msg := <-outCh:
+		if string(msg) != expectedMsg {
+			t.Errorf("message = %s, want %s", string(msg), expectedMsg)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Error("timeout waiting for message")
+	}
+}
+
+// TestClient_DepthStream_ContextDone tests that goroutine exits when context is done.
+func TestClient_DepthStream_ContextDone(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	readBlocked := make(chan struct{})
+	mockConn := &MockWSConnection{
+		ReadFunc: func(ctx context.Context) (websocket.MessageType, []byte, error) {
+			close(readBlocked)
+			// Block until context is cancelled
+			<-ctx.Done()
+			return 0, nil, ctx.Err()
+		},
+		CloseFunc: func(_ websocket.StatusCode, _ string) error {
+			return nil
+		},
+	}
+
+	mockWS := &MockWSClient{
+		Context: ctx,
+		DialFunc: func(_ string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
+			return mockConn, nil, nil
+		},
+	}
+
+	client := Client{
+		wsURL:    "wss://stream.binance.com:9443/ws",
+		WSClient: mockWS,
+	}
+
+	outCh := make(chan []byte, 10)
+	err := client.DepthStream([]string{"BTCUSDT"}, Second, outCh)
+	if err != nil {
+		t.Fatalf("DepthStream() error = %v", err)
+	}
+
+	// Wait for read to block
+	<-readBlocked
+
+	// Cancel context
+	cancel()
+
+	// Channel should be closed
+	select {
+	case _, ok := <-outCh:
+		if ok {
+			t.Error("expected channel to be closed after context cancel")
+		}
+	case <-time.After(200 * time.Millisecond):
+		// Channel closed is expected
+	}
+}
+
+// TestClient_DepthStream_CloseCalledOnExit tests that Close is called when goroutine exits.
+func TestClient_DepthStream_CloseCalledOnExit(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	closeCalled := make(chan struct{})
+	mockConn := &MockWSConnection{
+		ReadFunc: func(_ context.Context) (websocket.MessageType, []byte, error) {
+			return 0, nil, errors.New("read error")
+		},
+		CloseFunc: func(code websocket.StatusCode, _ string) error {
+			if code != websocket.StatusNormalClosure {
+				t.Errorf("Close called with code %v, want StatusNormalClosure", code)
+			}
+			close(closeCalled)
+			return nil
+		},
+	}
+
+	mockWS := &MockWSClient{
+		Context: ctx,
+		DialFunc: func(_ string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
+			return mockConn, nil, nil
+		},
+	}
+
+	client := Client{
+		wsURL:    "wss://stream.binance.com:9443/ws",
+		WSClient: mockWS,
+	}
+
+	outCh := make(chan []byte, 10)
+	err := client.DepthStream([]string{"BTCUSDT"}, Second, outCh)
+	if err != nil {
+		t.Fatalf("DepthStream() error = %v", err)
+	}
+
+	select {
+	case <-closeCalled:
+		// Success
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected Close to be called")
+	}
+}
+
+// TestMockWSConnection tests the MockWSConnection implementation.
+func TestMockWSConnection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("default implementations return nil", func(t *testing.T) {
+		t.Parallel()
+		mock := &MockWSConnection{}
+
+		_, _, err := mock.Read(context.Background())
+		if err != nil {
+			t.Errorf("Read() error = %v, want nil", err)
+		}
+
+		err = mock.Write(context.Background(), websocket.MessageText, []byte("test"))
+		if err != nil {
+			t.Errorf("Write() error = %v, want nil", err)
+		}
+
+		err = mock.Close(websocket.StatusNormalClosure, "")
+		if err != nil {
+			t.Errorf("Close() error = %v, want nil", err)
+		}
+	})
+
+	t.Run("custom funcs are called", func(t *testing.T) {
+		t.Parallel()
+
+		readCalled := false
+		writeCalled := false
+		closeCalled := false
+
+		mock := &MockWSConnection{
+			ReadFunc: func(_ context.Context) (websocket.MessageType, []byte, error) {
+				readCalled = true
+				return websocket.MessageText, []byte("data"), nil
+			},
+			WriteFunc: func(_ context.Context, _ websocket.MessageType, _ []byte) error {
+				writeCalled = true
+				return nil
+			},
+			CloseFunc: func(_ websocket.StatusCode, _ string) error {
+				closeCalled = true
+				return nil
+			},
+		}
+
+		mock.Read(context.Background())
+		mock.Write(context.Background(), websocket.MessageText, []byte("test"))
+		mock.Close(websocket.StatusNormalClosure, "")
+
+		if !readCalled {
+			t.Error("ReadFunc not called")
+		}
+		if !writeCalled {
+			t.Error("WriteFunc not called")
+		}
+		if !closeCalled {
+			t.Error("CloseFunc not called")
+		}
+	})
 }

@@ -10,8 +10,9 @@ run:
 [group("Podman")]
 build-container:
     podman build \
-      -f Containerfile \
-      -t binance-orderbook
+      -f deploy/Containerfile \
+      -t binance-orderbook \
+      .
 
 # Run key replacer image
 [group("Podman")]

@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	"github.com/franco-grobler/binance-diff-stream/internal/orderbook"
-	binanacestream "github.com/franco-grobler/binance-diff-stream/pkg/binanace-stream"
+	binancestream "github.com/franco-grobler/binance-diff-stream/pkg/binance-stream"
 	"github.com/franco-grobler/binance-diff-stream/pkg/printer"
 )
 
@@ -34,16 +34,16 @@ func main() {
 	rawCh := make(chan []byte, 1000)
 
 	// symbolChans maps "BTCUSDT" -> channel for that specific worker
-	symbolChans := make(map[string]chan *binanacestream.DiffStream)
+	symbolChans := make(map[string]chan *binancestream.DiffStream)
 	for _, s := range Symbols {
-		symbolChans[s] = make(chan *binanacestream.DiffStream, 100)
+		symbolChans[s] = make(chan *binancestream.DiffStream, 100)
 	}
 
 	// printCh is the channel for the dedicated printer goroutine
 	printCh := make(chan printer.TopLevelPrices, 100)
 
 	// Create WebSocket reader.
-	client := binanacestream.NewDefaultClient(ctx)
+	client := binancestream.NewDefaultClient(ctx)
 	go printerWorker(ctx, printCh)
 	go websocketClient(client, rawCh, symbolChans)
 	for _, s := range Symbols {
@@ -56,12 +56,12 @@ func main() {
 }
 
 func websocketClient(
-	client binanacestream.Client,
+	client binancestream.Client,
 	dataCh chan []byte,
-	symbolCh map[string]chan *binanacestream.DiffStream,
+	symbolCh map[string]chan *binancestream.DiffStream,
 ) {
 	ctx := client.WSClient.GetContext()
-	if err := client.DepthStream(Symbols, binanacestream.Second, dataCh); err != nil {
+	if err := client.DepthStream(Symbols, binancestream.Second, dataCh); err != nil {
 		panic(err)
 	}
 
@@ -74,7 +74,7 @@ func websocketClient(
 				return
 			}
 
-			update := &binanacestream.DiffStream{}
+			update := &binancestream.DiffStream{}
 			if err := client.Parser(data, update); err != nil {
 				log.Printf("Error parsing JSON: %v\n", err)
 				continue
@@ -95,9 +95,9 @@ func websocketClient(
 // It is the ONLY goroutine allowed to touch its OrderBook, ensuring thread safety.
 // After processing an update, it sends top-level data to the printer channel.
 func startWorker(
-	client binanacestream.Client,
+	client binancestream.Client,
 	symbol string,
-	in <-chan *binanacestream.DiffStream,
+	in <-chan *binancestream.DiffStream,
 	printCh chan<- printer.TopLevelPrices,
 ) {
 	ctx := client.WSClient.GetContext()
@@ -132,7 +132,7 @@ func startWorker(
 			// Apply updates
 			err := ob.Update(
 				update.UpdateBids,
-				update.UpdateBids,
+				update.UpdateAsks,
 				int64(update.FinalUpdateID),
 			)
 			if err != nil {

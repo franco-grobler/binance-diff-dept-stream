@@ -1,4 +1,4 @@
-package binanacestream
+package binancestream
 
 import (
 	"bytes"

@@ -76,7 +76,7 @@ func websocketClient(
 
 			update := &binanacestream.DiffStream{}
 			if err := client.Parser(data, update); err != nil {
-				log.Printf("Error parsing JSON: %v", err)
+				log.Printf("Error parsing JSON: %v\n", err)
 				continue
 			}
 
@@ -84,7 +84,7 @@ func websocketClient(
 				select {
 				case ch <- update:
 				default:
-					log.Printf("Worker channel full for %s, dropping update", update.Symbol)
+					log.Printf("Worker channel full for %s, dropping update\n", update.Symbol)
 				}
 			}
 		}
@@ -112,7 +112,7 @@ func startWorker(
 
 		update := <-in
 		if update.FirstUpdateID <= uint64(snapshot.LastUpdateID) {
-			fmt.Printf("Retrying snapshot for %s", symbol)
+			fmt.Printf("Retrying snapshot for %s... \n", symbol)
 			continue
 		}
 

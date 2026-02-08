@@ -38,15 +38,16 @@ type DiffStream struct {
 	EventType     string      `json:"e"`
 	EventTime     uint64      `json:"E"`
 	Symbol        string      `json:"s"`
-	FirstUpdateID uint        `json:"U"`
-	FinalUpdateID uint        `json:"u"`
+	FirstUpdateID uint64      `json:"U"`
+	FinalUpdateID uint64      `json:"u"`
 	UpdateBids    [][2]string `json:"b"`
 	UpdateAsks    [][2]string `json:"a"`
 }
 
 // DiffSnapshot reads a snapshot of the last N
 type DiffSnapshot struct {
-	LastUpdateID int32       `json:"lastUpdateId"`
+	LastUpdateID int64       `json:"lastUpdateId"`
+	Asks         [][2]string `json:"asks"`
 	Bids         [][2]string `json:"bids"`
 }
 

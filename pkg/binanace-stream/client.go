@@ -132,9 +132,9 @@ func (c *Client) DepthSnapshot(symbol string, limit int16) (*DiffSnapshot, error
 		return nil, respErr
 	}
 
-	snapshot := DiffSnapshot{}
-	if err := c.parseResponse(resp, DiffSnapshot{}); err != nil {
+	snapshot := &DiffSnapshot{}
+	if err := c.parseResponse(resp, snapshot); err != nil {
 		return nil, err
 	}
-	return &snapshot, nil
+	return snapshot, nil
 }

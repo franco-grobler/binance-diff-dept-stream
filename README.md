@@ -48,3 +48,12 @@ required data.
 
 A structure of the client offers dependency injection for the websocket and http
 client, ensuring the program can easily be tested.
+
+## Developer environment
+
+The environment can be built using [devbox](https://www.jetify.com/devbox).
+
+| Tool     | Use                       |
+| -------- | ------------------------- |
+| just     | Command runner            |
+| prettier | Formatting markdown files |

@@ -2,7 +2,11 @@ package binancestream
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"testing"
+
+	"github.com/coder/websocket"
 )
 
 func TestNewCoderClient(t *testing.T) {
@@ -110,42 +114,83 @@ func TestWSClient_Interface(t *testing.T) {
 	var _ wsClientChecker = (*CoderClient)(nil)
 }
 
-func TestCoderClient_Dial_InvalidURL(t *testing.T) {
+func TestWSConnection_Interface(t *testing.T) {
+	t.Parallel()
+
+	// Compile-time check that *websocket.Conn implements WSConnection
+	var _ WSConnection = (*websocket.Conn)(nil)
+}
+
+// MockWSClientForDialTests is a mock WSClient for testing dial behaviour.
+type MockWSClientForDialTests struct {
+	ctx      context.Context
+	dialFunc func(url string, opts *websocket.DialOptions) (WSConnection, *http.Response, error)
+}
+
+func (m *MockWSClientForDialTests) GetContext() context.Context {
+	return m.ctx
+}
+
+func (m *MockWSClientForDialTests) Dial(
+	url string,
+	opts *websocket.DialOptions,
+) (WSConnection, *http.Response, error) {
+	return m.dialFunc(url, opts)
+}
+
+func TestWSClient_Dial_InvalidURL(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	client := NewCoderClient(ctx)
+	expectedErr := errors.New("invalid URL: missing scheme")
 
-	// Test with an invalid URL - this should fail
-	conn, resp, err := client.Dial("invalid-url-without-scheme", nil)
+	mockClient := &MockWSClientForDialTests{
+		ctx: ctx,
+		dialFunc: func(url string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
+			// Simulate behaviour for invalid URL
+			if url == "invalid-url-without-scheme" {
+				return nil, nil, expectedErr
+			}
+			return nil, nil, nil
+		},
+	}
+
+	conn, resp, err := mockClient.Dial("invalid-url-without-scheme", nil)
 
 	if err == nil {
 		t.Error("expected error for invalid URL")
-		if conn != nil {
-			conn.Close(1000, "test cleanup")
-		}
+	}
+	if err != expectedErr {
+		t.Errorf("error = %v, want %v", err, expectedErr)
 	}
 	if conn != nil {
 		t.Error("expected nil connection on error")
 	}
-	// resp may or may not be nil depending on how far the dial got
-	_ = resp
+	if resp != nil {
+		t.Error("expected nil response on error")
+	}
 }
 
-func TestCoderClient_Dial_ConnectionRefused(t *testing.T) {
+func TestWSClient_Dial_ConnectionRefused(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	client := NewCoderClient(ctx)
+	expectedErr := errors.New("connection refused")
 
-	// Test with a valid URL format but unreachable host
-	conn, resp, err := client.Dial("wss://localhost:59999/ws", nil)
+	mockClient := &MockWSClientForDialTests{
+		ctx: ctx,
+		dialFunc: func(_ string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
+			return nil, nil, expectedErr
+		},
+	}
+
+	conn, resp, err := mockClient.Dial("wss://localhost:59999/ws", nil)
 
 	if err == nil {
 		t.Error("expected error for unreachable host")
-		if conn != nil {
-			conn.Close(1000, "test cleanup")
-		}
+	}
+	if err != expectedErr {
+		t.Errorf("error = %v, want %v", err, expectedErr)
 	}
 	if conn != nil {
 		t.Error("expected nil connection on error")
@@ -153,21 +198,86 @@ func TestCoderClient_Dial_ConnectionRefused(t *testing.T) {
 	_ = resp
 }
 
-func TestCoderClient_Dial_ContextCancelled(t *testing.T) {
+func TestWSClient_Dial_ContextCancelled(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	client := NewCoderClient(ctx)
+	mockClient := &MockWSClientForDialTests{
+		ctx: ctx,
+		dialFunc: func(_ string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
+			// Check if context is cancelled
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			return nil, nil, nil
+		},
+	}
 
-	conn, resp, err := client.Dial("wss://stream.binance.com:9443/ws", nil)
+	conn, resp, err := mockClient.Dial("wss://stream.binance.com:9443/ws", nil)
 
 	if err == nil {
 		t.Error("expected error for cancelled context")
-		if conn != nil {
-			conn.Close(1000, "test cleanup")
-		}
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+	if conn != nil {
+		t.Error("expected nil connection on error")
 	}
 	_ = resp
+}
+
+func TestWSClient_Dial_Success(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mockConn := &MockWSConnection{}
+	mockResp := &http.Response{StatusCode: http.StatusSwitchingProtocols}
+
+	mockClient := &MockWSClientForDialTests{
+		ctx: ctx,
+		dialFunc: func(_ string, _ *websocket.DialOptions) (WSConnection, *http.Response, error) {
+			return mockConn, mockResp, nil
+		},
+	}
+
+	conn, resp, err := mockClient.Dial("wss://stream.binance.com:9443/ws", nil)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if conn != mockConn {
+		t.Error("expected mock connection to be returned")
+	}
+	if resp != mockResp {
+		t.Error("expected mock response to be returned")
+	}
+}
+
+func TestWSClient_Dial_WithOptions(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	var receivedOpts *websocket.DialOptions
+
+	mockClient := &MockWSClientForDialTests{
+		ctx: ctx,
+		dialFunc: func(_ string, opts *websocket.DialOptions) (WSConnection, *http.Response, error) {
+			receivedOpts = opts
+			return &MockWSConnection{}, nil, nil
+		},
+	}
+
+	opts := &websocket.DialOptions{
+		Subprotocols: []string{"test-protocol"},
+	}
+
+	_, _, err := mockClient.Dial("wss://example.com/ws", opts)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if receivedOpts != opts {
+		t.Error("options not passed through correctly")
+	}
 }

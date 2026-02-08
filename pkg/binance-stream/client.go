@@ -109,7 +109,8 @@ func (c *Client) DepthStream(
 				if err != nil {
 					// In a real app, implement reconnect logic here.
 					// For assessment, we just stop.
-					panic(fmt.Sprintf("error reading data: %v", err))
+					fmt.Printf("error reading data: %v \n", err)
+					return
 				}
 				outCh <- data
 			}

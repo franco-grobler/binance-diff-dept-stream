@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -154,8 +153,8 @@ func startWorker(
 			select {
 			case printCh <- printer.TopLevelPrices{
 				Symbol:    ob.Symbol,
-				Ask:       int32(bestAsk),
-				Bid:       int32(bestBid),
+				Ask:       bestAsk,
+				Bid:       bestBid,
 				Timestamp: update.EventTime,
 			}:
 			default:
@@ -165,18 +164,7 @@ func startWorker(
 	}
 }
 
-func printerWorker(ctx context.Context, printCh chan printer.TopLevelPrices) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case data, ok := <-printCh:
-			if !ok {
-				return
-			}
-			if out, err := json.Marshal(data); err == nil {
-				fmt.Printf("%s\n", out)
-			}
-		}
-	}
+func printerWorker(ctx context.Context, printCh <-chan printer.TopLevelPrices) {
+	stdPrinter := printer.Stdout{}
+	stdPrinter.PriceWriter(ctx, printCh)
 }

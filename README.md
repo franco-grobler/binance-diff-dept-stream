@@ -185,7 +185,7 @@ because:
 - String iteration is faster than float parsing for this specific case
 - Avoids floating-point comparison issues
 
-### Client Architecture (`pkg/binanace-stream`)
+### Client Architecture (`pkg/binance-stream`)
 
 **Design Decisions:**
 
@@ -215,11 +215,20 @@ type WSClient interface {
     GetContext() context.Context
     Dial(
         url string, opts *websocket.DialOptions,
-    ) (*websocket.Conn, *http.Response, error)
+    ) (WSConnection, *http.Response, error)
+}
+
+type WSConnection interface {
+    Read(ctx context.Context) (websocket.MessageType, []byte, error)
+    Write(ctx context.Context, typ websocket.MessageType, p []byte) error
+    Close(code websocket.StatusCode, reason string) error
 }
 
 type Parser func(data []byte, v any) error
 ```
+
+The `WSConnection` interface allows mocking WebSocket connections for comprehensive
+unit testing without requiring a real WebSocket server.
 
 ### Concurrency Model
 
@@ -270,13 +279,12 @@ go func() {
 
 ### Trade-offs
 
-| Decision                 | Benefit                   | Trade-off                 |
-| ------------------------ | ------------------------- | ------------------------- |
-| Sorted slices vs maps    | O(1) best price, locality | O(n) insert shift         |
-| Non-blocking sends       | No cascade blocking       | Data loss under pressure  |
-| One worker per symbol    | No locks needed           | More goroutines           |
-| String quantity          | Precision preserved       | Parse cost for arithmetic |
-| Panic on WebSocket error | Simple error handling     | No reconnection support   |
+| Decision              | Benefit                   | Trade-off                 |
+| --------------------- | ------------------------- | ------------------------- |
+| Sorted slices vs maps | O(1) best price, locality | O(n) insert shift         |
+| Non-blocking sends    | No cascade blocking       | Data loss under pressure  |
+| One worker per symbol | No locks needed           | More goroutines           |
+| String quantity       | Precision preserved       | Parse cost for arithmetic |
 
 ## Developer environment
 
@@ -289,84 +297,24 @@ The environment can be built using [devbox](https://www.jetify.com/devbox).
 
 ## Possible Improvements and Shortcomings
 
-### Code Issues
-
-#### 1. Bug in Order Book Update (cmd/streamer/main.go:134)
-
-The `startWorker` function passes `update.UpdateBids` twice instead of passing
-both bids and asks:
-
-```go
-// Current (incorrect):
-book.Update(update.UpdateBids, update.UpdateBids)
-
-// Should be:
-book.Update(update.UpdateBids, update.UpdateAsks)
-```
-
-This bug causes ask updates to be ignored, resulting in stale ask prices.
-
-#### 2. Typo in Package Name
-
-The package `pkg/binanace-stream` contains a typo ("binanace" instead of
-"binance"). This should be renamed to `pkg/binance-stream` for consistency and
-discoverability.
-
 ### Architectural Improvements
 
-#### 1. Error Handling in WebSocket Goroutine
+#### Graceful Shutdown
 
-The `DepthStream` function (client.go:112) uses `panic` for error handling:
+The application has basic signal handling but could be improved:
 
-```go
-panic(fmt.Sprintf("error reading data: %v", err))
-```
+**Current implementation:**
 
-**Issues:**
-
-- Panics crash the entire application on any read error
-- No reconnection logic for transient network failures
-- Makes testing difficult (tests that trigger errors will panic)
-
-**Recommended approach:**
-
-```go
-if err != nil {
-    log.Printf("error reading data: %v", err)
-    return // Exit goroutine gracefully
-}
-```
-
-Or implement proper error propagation via an error channel.
-
-#### 2. WebSocket Connection Interface
-
-The `DepthStream` function uses `*websocket.Conn` directly, which is a concrete
-type. This makes unit testing difficult without a real WebSocket server.
-
-**Recommended approach:**
-
-```go
-type WSConnection interface {
-    Read(ctx context.Context) (websocket.MessageType, []byte, error)
-    Close(code websocket.StatusCode, reason string) error
-}
-```
-
-This would allow mocking the connection for comprehensive unit tests.
-
-#### 3. Graceful Shutdown
-
-The application lacks a proper shutdown mechanism. When the context is
-cancelled, goroutines may not clean up resources properly.
+- Handles SIGINT and SIGTERM via context cancellation
+- Goroutines check `ctx.Done()` to exit
 
 **Recommended improvements:**
 
 - Use `sync.WaitGroup` to track goroutine completion
-- Implement signal handling (SIGINT, SIGTERM) for clean shutdown
 - Add timeout for graceful shutdown before force exit
+- Ensure all resources (WebSocket connections, channels) are properly closed
 
-#### 4. Configuration Management
+#### Configuration Management
 
 Hardcoded values like API URLs, symbols, and limits should be configurable:
 
@@ -382,7 +330,7 @@ client := NewClient(cfg.APIURL, cfg.WSURL, ...)
 
 ### Performance Improvements
 
-#### 1. JSON Unmarshalling
+#### JSON Unmarshalling
 
 The current implementation uses `encoding/json` which is simple but not the
 fastest. Consider:
@@ -393,7 +341,7 @@ fastest. Consider:
 
 Benchmarks should verify improvements for the specific data structures used.
 
-#### 2. Memory Allocations
+#### Memory Allocations
 
 The order book uses sorted slices which may grow during operation. Consider:
 
@@ -401,7 +349,7 @@ The order book uses sorted slices which may grow during operation. Consider:
 - Using a fixed-size ring buffer for high-frequency updates
 - Object pooling for `PriceLevel` structs in hot paths
 
-#### 3. Channel Buffer Sizes
+#### Channel Buffer Sizes
 
 The channel buffer sizes are hardcoded. Consider:
 
@@ -413,26 +361,39 @@ The channel buffer sizes are hardcoded. Consider:
 
 #### 1. Current Coverage
 
-| Package             | Coverage | Limitation                      |
-| ------------------- | -------- | ------------------------------- |
-| internal/orderbook  | 100%     | Fully covered                   |
-| pkg/printer         | 90%      | Error logging path untested     |
-| pkg/binanace-stream | 68.1%    | DepthStream goroutine (38.1%)   |
-| cmd/streamer        | 0%       | Main package, integration tests |
+| Package            | Coverage | Notes                                 |
+| ------------------ | -------- | ------------------------------------- |
+| internal/orderbook | 100%     | Fully covered                         |
+| pkg/binance-stream | 91.7%    | Mockable WSConnection interface       |
+| pkg/printer        | 90%      | Error logging path untested           |
+| cmd/streamer       | 0%       | Main package, requires integration    |
 
-#### 2. DepthStream Coverage Gap
+All tests run without external network calls. WebSocket and HTTP client behavior
+is tested using mocks and local test servers (`httptest.NewServer`).
 
-The `DepthStream` goroutine is only 38.1% covered because:
+#### 2. WebSocket Testing
 
-- Uses concrete `*websocket.Conn` type (not mockable)
-- Panics on errors prevent test completion
-- Coverage data is lost when tests panic
+The `WSConnection` interface enables comprehensive unit testing of the
+`DepthStream` goroutine:
 
-**To improve:** Refactor to use interfaces and proper error handling.
+```go
+// MockWSConnection for testing
+type MockWSConnection struct {
+    ReadFunc  func(ctx context.Context) (websocket.MessageType, []byte, error)
+    WriteFunc func(ctx context.Context, typ websocket.MessageType, p []byte) error
+    CloseFunc func(code websocket.StatusCode, reason string) error
+}
+```
 
-#### 3. Integration Tests
+Test coverage includes:
+- Message reading and forwarding
+- Read error handling (graceful exit)
+- Context cancellation
+- Connection close behavior
 
-Add integration tests that:
+#### 3. Future Improvements
+
+Consider adding integration tests that:
 
 - Connect to Binance testnet
 - Verify order book synchronization
@@ -449,7 +410,7 @@ Add benchmarks for:
 
 ### Observability Improvements
 
-#### 1. Structured Logging
+#### Structured Logging
 
 Replace `log.Printf` with structured logging (e.g., `slog`, `zap`, `zerolog`):
 
@@ -462,7 +423,7 @@ logger.Info("order book updated",
 )
 ```
 
-#### 2. Metrics
+#### Metrics
 
 Add Prometheus metrics for:
 
@@ -471,7 +432,7 @@ Add Prometheus metrics for:
 - WebSocket connection state
 - Error rates
 
-#### 3. Health Checks
+#### Health Checks
 
 Implement health check endpoints for container orchestration:
 
@@ -480,7 +441,4 @@ Implement health check endpoints for container orchestration:
 
 ### Documentation Improvements
 
-- Add GoDoc comments to all exported types and functions
 - Include architecture diagrams
-- Document the order book synchronization algorithm
-- Add examples for common use cases

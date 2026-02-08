@@ -15,18 +15,18 @@ possible.
 ### Tasks
 
 1. Connect to Binance’s WebSocket API and subscribe to the DiM. Depth Stream.
-   - [Documentation can be found here.](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams#diM-depth-stream)
-   - Process incoming data on multiple symbols, using appropriate data
-     structures to maintain all orderbook levels in memory. Use the standard
-     library JSON package (V1) to perform the unmarshalling.
-   - On each update, print the top level prices to stdout in the following
-     format:
-     `“{symbol”:”BTCUSDT”,“ask”:100001.00,”bid”:100000.00 “ts”:1672515782136}”`
+    - [Documentation can be found here.](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams#diM-depth-stream)
+    - Process incoming data on multiple symbols, using appropriate data
+      structures to maintain all orderbook levels in memory. Use the standard
+      library JSON package (V1) to perform the unmarshalling.
+    - On each update, print the top level prices to stdout in the following
+      format:
+      `“{symbol”:”BTCUSDT”,“ask”:100001.00,”bid”:100000.00 “ts”:1672515782136}”`
 
 2. Propose alternate strategies for the unmarshalling step above in order to
    improve performance.
-   - Your strategies should consider: heap allocations and speed.
-   - Provide verification via testing and benchmarks.
+    - Your strategies should consider: heap allocations and speed.
+    - Provide verification via testing and benchmarks.
 
 ## Design
 

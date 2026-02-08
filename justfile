@@ -1,6 +1,11 @@
 default:
     just --list
 
+# Run application
+[group("Dev")]
+run:
+    go run ./cmd/streamer/
+
 # Build key replacer image
 [group("Podman")]
 build-container:

@@ -2,6 +2,7 @@ package binanacestream
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -28,8 +29,19 @@ type Endpoint string
 // DepthSnapshotEndpoint api endpoint for order-book snapshot.
 const DepthSnapshotEndpoint = "v3/depth"
 
-// NewClient returns a standard Client for StreamClient.
-func NewClient(httpClient HTTPClient, wsClient WSClient, parser Parser) Client {
+// NewDefaultClient returns a Client for StreamClient with all defaults set.
+func NewDefaultClient(ctx context.Context) Client {
+	return Client{
+		"https://api.binance.com/api",
+		"wss://stream.binance.com:9443/ws",
+		NewHTTPClient(),
+		NewCoderClient(ctx),
+		json.Unmarshal,
+	}
+}
+
+// NewSimpleClient returns a standard Client for StreamClient.
+func NewSimpleClient(httpClient HTTPClient, wsClient WSClient, parser Parser) Client {
 	return Client{
 		"https://api.binance.com/api/",
 		"wss://stream.binance.com:9443/ws/",
@@ -60,7 +72,6 @@ func (c *Client) parseResponse(resp *http.Response, data any) error {
 
 // DepthStream implements [StreamClient].
 func (c *Client) DepthStream(
-	ctx context.Context,
 	symbols []string,
 	_ UpdateSpeed,
 	outCh chan<- []byte,
@@ -72,7 +83,8 @@ func (c *Client) DepthStream(
 	url := fmt.Sprintf("%s/%s", c.wsURL, strings.Join(streams, "/"))
 
 	// Dial the connection
-	conn, _, err := c.WSClient.Dial(ctx, url, nil)
+	ctx := c.WSClient.GetContext()
+	conn, _, err := c.WSClient.Dial(url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to dial: %w", err)
 	}
@@ -100,7 +112,6 @@ func (c *Client) DepthStream(
 					panic(fmt.Sprintf("error reading data: %v", err))
 				}
 				outCh <- data
-				log.Printf("received message: %v\n", data)
 			}
 		}
 	}()

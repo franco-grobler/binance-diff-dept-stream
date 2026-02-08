@@ -1,4 +1,4 @@
-package binanacestream
+package binancestream
 
 // UpdateSpeed allowed values for depth when streaming from websocket.
 type UpdateSpeed int

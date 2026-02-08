@@ -25,15 +25,7 @@ type OrderBook struct {
 }
 
 // DefaultCapacity is the initial capacity for Bids/Asks slices.
-// Set to 500 to accommodate typical order book depths without reallocation.
-// Binance depth streams typically send up to 1000 levels, but most activity
-// is in the top 500 levels.
 const DefaultCapacity = 5000
-
-// MaxLevels is the maximum number of levels to retain in the order book.
-// This prevents unbounded memory growth when prices move significantly.
-// Set to 0 to disable trimming.
-const MaxLevels = 1000
 
 // NewOrderBook creates a new empty order book.
 func NewOrderBook(symbol string) *OrderBook {
@@ -89,9 +81,7 @@ func (ob *OrderBook) updateLevel(levels *[]PriceLevel, price float64, qty string
 	found := idx < n && (*levels)[idx].Price == price
 
 	// Case 1: Delete (Quantity is "0.00000000" or "0" or "0.0")
-	isDelete := isZeroQuantity(qty)
-
-	if isDelete {
+	if isZeroQuantity(qty) {
 		if found {
 			// Remove element at idx
 			*levels = append((*levels)[:idx], (*levels)[idx+1:]...)

@@ -36,7 +36,7 @@ pipeline pattern with three distinct stages, each running in its own goroutine.
 
 ### Architecture Overview
 
-```
+```text
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   WebSocket     │     │   Per-Symbol    │     │    Printer      │
 │   Client        │────▶│   Workers       │────▶│    Worker       │
@@ -227,8 +227,8 @@ type WSConnection interface {
 type Parser func(data []byte, v any) error
 ```
 
-The `WSConnection` interface allows mocking WebSocket connections for comprehensive
-unit testing without requiring a real WebSocket server.
+The `WSConnection` interface allows mocking WebSocket connections for
+comprehensive unit testing without requiring a real WebSocket server.
 
 ### Concurrency Model
 
@@ -240,7 +240,7 @@ unit testing without requiring a real WebSocket server.
 - **Non-blocking sends** - prevents slow consumers from blocking producers
 - **Context-based cancellation** - graceful shutdown via context propagation
 
-```
+```text
 main goroutine
     │
     ├── printerWorker (1)
@@ -359,19 +359,19 @@ The channel buffer sizes are hardcoded. Consider:
 
 ### Testing Improvements
 
-#### 1. Current Coverage
+#### Current Coverage
 
-| Package            | Coverage | Notes                                 |
-| ------------------ | -------- | ------------------------------------- |
-| internal/orderbook | 100%     | Fully covered                         |
-| pkg/binance-stream | 91.7%    | Mockable WSConnection interface       |
-| pkg/printer        | 90%      | Error logging path untested           |
-| cmd/streamer       | 0%       | Main package, requires integration    |
+| Package            | Coverage | Notes                              |
+| ------------------ | -------- | ---------------------------------- |
+| internal/orderbook | 100%     | Fully covered                      |
+| pkg/binance-stream | 91.7%    | Mockable WSConnection interface    |
+| pkg/printer        | 90%      | Error logging path untested        |
+| cmd/streamer       | 0%       | Main package, requires integration |
 
 All tests run without external network calls. WebSocket and HTTP client behavior
 is tested using mocks and local test servers (`httptest.NewServer`).
 
-#### 2. WebSocket Testing
+#### WebSocket Testing
 
 The `WSConnection` interface enables comprehensive unit testing of the
 `DepthStream` goroutine:
@@ -386,12 +386,13 @@ type MockWSConnection struct {
 ```
 
 Test coverage includes:
+
 - Message reading and forwarding
 - Read error handling (graceful exit)
 - Context cancellation
 - Connection close behavior
 
-#### 3. Future Improvements
+#### Future Improvements
 
 Consider adding integration tests that:
 
@@ -400,7 +401,7 @@ Consider adding integration tests that:
 - Test reconnection logic
 - Validate output format
 
-#### 4. Benchmarks
+#### Benchmarks
 
 Add benchmarks for:
 
